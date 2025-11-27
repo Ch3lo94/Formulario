@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Formulario de regalos</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    body{font-family:Arial, sans-serif;max-width:900px;margin:18px auto;padding:12px;}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}
+    .card{border:1px solid #ddd;border-radius:8px;padding:12px;background:#fff;}
+    .item img{width:100%;height:140px;object-fit:cover;border-radius:6px}
+    .disabled{opacity:0.45;pointer-events:none;}
+  </style>
+</head>
+<body>
+  <h2>Formulario de regalos</h2>
+  <div class="card">
+    <div id="gSign"></div>
+    <div id="userInfo" style="display:none;">
+      <b>Email:</b> <span id="userEmail"></span><br>
+      <b>Nombre:</b> <span id="userName"></span><br>
+    </div>
+
+    <div id="statusMsg" style="color:crimson;margin:8px 0;"></div>
+
+    <div id="itemsArea" class="grid"></div>
+
+    <div style="margin-top:12px;">
+      <input id="fullName" placeholder="Nombre completo" style="width:100%;padding:8px;margin-top:6px;display:none;">
+      <button id="submitBtn" style="margin-top:10px;display:none;">Enviar selección</button>
+      <span id="resultMsg" style="margin-left:12px;"></span>
+    </div>
+  </div>
+
+<script>
+const CLIENT_ID = 'TU_CLIENT_ID';
+const WEB_APP_URL = 'TU_WEBAPP_URL'; // ej: https://script.google.com/macros/s/AKfy.../exec
+
+let idToken = null;
+let currentUser = null;
+let items = [];
+
+// Inicializar botón GSI
+function handleCredentialResponse(resp){
+  idToken = resp.credential;
+  const payload = parseJwt(idToken);
+  currentUser = payload;
+  document.getElementById('userEmail').textContent = payload.email || '';
+  document.getElementById('userName').textContent = payload.name || '';
+  document.getElementById('userInfo').style.display = 'block';
+  document.getElementById('fullName').style.display = 'block';
+  document.getElementById('submitBtn').style.display = 'inline-block';
+  document.getElementById('fullName').value = payload.name || '';
+}
+window.onload = function(){
+  google.accounts.id.initialize({ client_id: CLIENT_ID, callback: handleCredentialResponse });
+  google.accounts.id.renderButton(document.getElementById('gSign'), { theme:'outline', size:'large' });
+  fetchState();
+  document.getElementById('submitBtn').addEventListener('click', sendSelection);
+};
+
+function parseJwt(token){
+  try{
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g,'+').replace(/_/g,'/');
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map(c=>'%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+    return JSON.parse(jsonPayload);
+  } catch(e){return {};}
+}
+
+async function fetchState(){
+  const r = await fetch(WEB_APP_URL + '?action=state');
+  const j = await r.json();
+  if (j.items) {
+    items = j.items;
+    renderItems();
+  } else {
+    document.getElementById('statusMsg').textContent = j.error || 'Error al obtener estado';
+  }
+}
+
+function renderItems(){
+  const area = document.getElementById('itemsArea');
+  area.innerHTML = '';
+  items.forEach(it => {
+    const div = document.createElement('div');
+    div.className = 'card item';
+    if (it.remaining <= 0) div.classList.add('disabled');
+    div.innerHTML = `
+      <img src="${it.img}" alt="${it.name}" />
+      <h4>${it.name}</h4>
+      <div>Disponibles: <span class="remaining">${it.remaining}</span></div>
+      <div style="margin-top:6px;"><input type="number" min="0" max="${it.remaining}" value="0" style="width:70px" data-idx="${it.index}" /></div>
+    `;
+    area.appendChild(div);
+  });
+}
+
+async function sendSelection(){
+  if (!idToken) { document.getElementById('resultMsg').textContent = 'Inicia sesión primero.'; return; }
+  const fullName = (document.getElementById('fullName').value || '').trim();
+  if (!fullName) { document.getElementById('resultMsg').textContent = 'Ingresa nombre completo.'; return; }
+
+  // leer cantidades >0
+  const inputs = Array.from(document.querySelectorAll('#itemsArea input[type=number]'));
+  const selections = [];
+  for (const inp of inputs) {
+    const v = Number(inp.value) || 0;
+    const idx = Number(inp.dataset.idx);
+    for (let i=0;i<v;i++) selections.push(idx);
+  }
+  if (selections.length === 0) { document.getElementById('resultMsg').textContent = 'Selecciona al menos un item.'; return; }
+
+  // enviar POST
+  try {
+    const res = await fetch(WEB_APP_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ id_token: idToken, fullName: fullName, selections: selections })
+    });
+    const j = await res.json();
+    if (j.success) {
+      items = j.items;
+      renderItems();
+      document.getElementById('resultMsg').textContent = 'Gracias — tu selección fue registrada.';
+      // opcional: limpiar inputs
+      document.querySelectorAll('#itemsArea input[type=number]').forEach(i=>i.value=0);
+    } else {
+      document.getElementById('resultMsg').textContent = 'Error: ' + (j.error || 'desconocido');
+    }
+  } catch (e) {
+    document.getElementById('resultMsg').textContent = 'Error de conexión';
+  }
+}
+</script>
+</body>
+</html>
